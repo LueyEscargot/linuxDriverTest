@@ -32,4 +32,6 @@ typedef struct Test_Dev
      struct semaphore sem;
 } Test_Dev;
 
+#define SCULL_MAX_TYPE 5
+
 #endif /* __DRIVER_H__ */
