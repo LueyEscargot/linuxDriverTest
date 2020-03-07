@@ -1,9 +1,17 @@
+#ifndef __KERNEL__
+#define __KERNEL__
+#endif
+#ifndef MODULE
+#define MODULE
+#endif
+
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/types.h>
+#include "driver.h"
 
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("Liu Yu - source@liuyu.com");
@@ -14,27 +22,173 @@ typedef struct inode *INODEPTR;
 
 dev_t gDev = 0;
 
-loff_t _llseek(struct file *pf, loff_t offset, int n)
+loff_t _llseek(struct file *filp, loff_t off, int whence)
 {
-    return 0;
+    Test_Dev *dev = (Test_Dev *)filp->private_data;
+    loff_t newpos;
+
+    switch (whence)
+    {
+    case 0:
+        newpos = off;
+        break;
+
+    case 1:
+        newpos = filp->f_pos + off;
+        break;
+
+    case 2:
+        newpos = dev->size + off;
+        break;
+
+    default:
+        return -EINVAL;
+    }
+    if (newpos < 0)
+        return -EINVAL;
+    filp->f_pos = newpos;
+    return newpos;
 }
 
-ssize_t _read(struct file *pf, char __user *buffer, size_t size, loff_t *offset)
+ssize_t _read(struct file *filp,
+              char *buf,
+              size_t count,
+              loff_t *f_pos)
 {
-    return snprintf(buffer, size, "%s", "Character Device Driver");
+    Test_Dev *dev = filp->private_data;
+    Test_Dev *dptr;
+    int quantum = dev->quantum;
+    int qset = dev->qset;
+    int itemsize = quantum * qset;
+    int item, s_pos, q_pos, rest;
+    ssize_t ret = 0;
+
+    if (down_interruptible(&dev->sem))
+        return -ERESTARTSYS;
+    if (*f_pos >= dev->size)
+        goto out;
+    if (*f_pos + count > dev->size)
+        count = dev->size - *f_pos;
+
+    item = (long)*f_pos / itemsize;
+    rest = (long)*f_pos % itemsize;
+    s_pos = rest / quantum;
+    q_pos = rest % quantum;
+
+    dptr = alloc_device(dev, item);
+
+    if (!dptr->data)
+        goto out;
+    if (!dptr->data[s_pos])
+        goto out;
+
+    if (count > quantum - q_pos)
+        count = quantum - q_pos;
+
+    if (copy_to_user(buf, dptr->data[s_pos] + q_pos, count))
+    {
+        ret = -EFAULT;
+        goto out;
+    }
+    *f_pos += count;
+    ret = count;
+
+out:
+    up(&dev->sem);
+    return ret;
 }
 
-ssize_t _write(struct file *pf, const char __user *buffer, size_t size, loff_t *offset)
+ssize_t _write(struct file *filp,
+               const char *buf,
+               size_t count,
+               loff_t *f_pos)
 {
-    return size;
+    Test_Dev *dev = filp->private_data;
+    Test_Dev *dptr;
+    int quantum = dev->quantum;
+    int qset = dev->qset;
+    int itemsize = quantum * qset;
+    int item, s_pos, q_pos, rest;
+    ssize_t ret = -ENOMEM;
+
+    if (down_interruptible(&dev->sem))
+        return -ERESTARTSYS;
+
+    item = (long)*f_pos / itemsize;
+    rest = (long)*f_pos % itemsize;
+    s_pos = rest / quantum;
+    q_pos = rest % quantum;
+
+    dptr = alloc_device(dev, item);
+    if (!dptr->data)
+    {
+        dptr->data = kmalloc(qset * sizeof(char *), GFP_KERNEL);
+        if (!dptr->data)
+            goto out;
+        memset(dptr->data, 0, qset * sizeof(char *));
+    }
+    if (!dptr->data[s_pos])
+    {
+        dptr->data[s_pos] = kmalloc(quantum, GFP_KERNEL);
+        if (!dptr->data[s_pos])
+            goto out;
+    }
+
+    if (count > quantum - q_pos)
+        count = quantum - q_pos;
+
+    if (copy_from_user(dptr->data[s_pos] + q_pos, buf, count))
+    {
+        ret = -EFAULT;
+        goto out;
+    }
+    *f_pos += count;
+    ret = count;
+
+    if (dev->size < *f_pos)
+        dev->size = *f_pos;
+
+out:
+    up(&dev->sem);
+    return ret;
 }
 
 long _ioctl(FILEPTR pf, unsigned int i, unsigned long l)
 {
-    return -ENOTTY;
+    // Test_Dev *dev; 
+    // int num = NUM(inode->i_rdev);
+    // int type = TYPE(inode->i_rdev);
+
+    
+    // if (!filp->private_data && type) {
+    //     if (type > SCULL_MAX_TYPE) return -ENODEV;
+    //     filp->f_op = scull_fop_array[type];
+    //     return filp->f_op->open(inode, filp); 
+    // }
+
+    
+    // dev = (Test_Dev *)filp->private_data;
+    // if (!dev) {
+    //     if (num >= scull_nr_devs) return -ENODEV;
+    //     dev = &Test_devices[num];
+    //     filp->private_data = dev; 
+    // }
+
+    // MOD_INC_USE_COUNT;  
+    
+    // if ( (filp->f_flags & O_ACCMODE) == O_WRONLY) {
+    //     if (down_interruptible(&dev->sem)) {
+    //         MOD_DEC_USE_COUNT;
+    //         return -ERESTARTSYS;
+    //     }
+    //     scull_trim(dev); 
+    //     up(&dev->sem);
+    // }
+
+    return 0;          
 }
 
-int _open(INODEPTR nod, FILEPTR pf)
+int _open(struct inode *inode, struct file *filp)
 {
     return 1;
 }
@@ -100,6 +254,19 @@ static __exit void driver_exit(void)
     unregister_chrdev_region(gDev, 4);
 }
 
+Test_Dev *alloc_device(Test_Dev *dev, int n)
+{
+    while (n--)
+    {
+        if (!dev->next)
+        {
+            dev->next = kmalloc(sizeof(Test_Dev), GFP_KERNEL);
+            memset(dev->next, 0, sizeof(Test_Dev));
+        }
+        dev = dev->next;
+    }
+    return dev;
+}
 
 EXPORT_SYMBOL(_llseek);
 EXPORT_SYMBOL(_read);
