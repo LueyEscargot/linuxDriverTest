@@ -155,42 +155,74 @@ out:
 
 long _ioctl(FILEPTR pf, unsigned int i, unsigned long l)
 {
-    // Test_Dev *dev; 
+    // Test_Dev *dev;
     // int num = NUM(inode->i_rdev);
     // int type = TYPE(inode->i_rdev);
 
-    
     // if (!filp->private_data && type) {
     //     if (type > SCULL_MAX_TYPE) return -ENODEV;
     //     filp->f_op = scull_fop_array[type];
-    //     return filp->f_op->open(inode, filp); 
+    //     return filp->f_op->open(inode, filp);
     // }
 
-    
     // dev = (Test_Dev *)filp->private_data;
     // if (!dev) {
     //     if (num >= scull_nr_devs) return -ENODEV;
     //     dev = &Test_devices[num];
-    //     filp->private_data = dev; 
+    //     filp->private_data = dev;
     // }
 
-    // MOD_INC_USE_COUNT;  
-    
+    // MOD_INC_USE_COUNT;
+
     // if ( (filp->f_flags & O_ACCMODE) == O_WRONLY) {
     //     if (down_interruptible(&dev->sem)) {
     //         MOD_DEC_USE_COUNT;
     //         return -ERESTARTSYS;
     //     }
-    //     scull_trim(dev); 
+    //     scull_trim(dev);
     //     up(&dev->sem);
     // }
 
-    return 0;          
+    return 0;
 }
 
 int _open(struct inode *inode, struct file *filp)
 {
-    return 1;
+    Test_Dev *dev;
+    int num = NUM(inode->i_rdev);
+    int type = TYPE(inode->i_rdev);
+
+    if (!filp->private_data && type)
+    {
+        if (type > TEST_MAX_TYPE)
+            return -ENODEV;
+        filp->f_op = scull_fop_array[type];
+        return filp->f_op->open(inode, filp);
+    }
+
+    dev = (Test_Dev *)filp->private_data;
+    if (!dev)
+    {
+        if (num >= TEST_NR_DEVS)
+            return -ENODEV;
+        dev = &Test_devices[num];
+        filp->private_data = dev;
+    }
+
+    MOD_INC_USE_COUNT;
+
+    if ((filp->f_flags & O_ACCMODE) == O_WRONLY)
+    {
+        if (down_interruptible(&dev->sem))
+        {
+            MOD_DEC_USE_COUNT;
+            return -ERESTARTSYS;
+        }
+        test_trim(dev);
+        up(&dev->sem);
+    }
+
+    return 0;
 }
 
 int _release(INODEPTR nod, FILEPTR pf)
@@ -267,6 +299,50 @@ Test_Dev *alloc_device(Test_Dev *dev, int n)
     }
     return dev;
 }
+
+int test_trim(Test_Dev *dev)
+{
+    Test_Dev *next, *dptr;
+    int qset = dev->qset;
+    int i;
+
+    for (dptr = dev; dptr; dptr = next)
+    {
+        if (dptr->data)
+        {
+            for (i = 0; i < qset; i++)
+                if (dptr->data[i])
+                    kfree(dptr->data[i]);
+            kfree(dptr->data);
+            dptr->data = NULL;
+        }
+        next = dptr->next;
+        if (dptr != dev)
+            kfree(dptr);
+    }
+    dev->size = 0;
+    dev->quantum = test_quantum;
+    dev->qset = test_qset;
+    dev->next = NULL;
+    return 0;
+}
+
+struct file_operations test_fops = {
+    llseek : _llseek,
+    read : _read,
+    write : _write,
+    open : _open,
+    release : _release,
+};
+
+struct file_operations *test_fop_array[] = {
+    &test_fops,
+};
+
+int test_major = 0;
+int test_nr_devs = 4;
+int test_quantum = 4000;
+int test_qset = 1000;
 
 EXPORT_SYMBOL(_llseek);
 EXPORT_SYMBOL(_read);
