@@ -153,35 +153,28 @@ out:
     return ret;
 }
 
-long _ioctl(FILEPTR pf, unsigned int i, unsigned long l)
+long _ioctl(struct inode *inode, struct file *filp,
+            unsigned int cmd, unsigned long arg)
 {
-    // Test_Dev *dev;
-    // int num = NUM(inode->i_rdev);
-    // int type = TYPE(inode->i_rdev);
+    int err = 0, tmp;
 
-    // if (!filp->private_data && type) {
-    //     if (type > SCULL_MAX_TYPE) return -ENODEV;
-    //     filp->f_op = scull_fop_array[type];
-    //     return filp->f_op->open(inode, filp);
-    // }
+    // if (_IOC_TYPE(cmd) != SCULL_IOC_MAGIC)
+    //     return -ENOTTY;
+    // if (_IOC_NR(cmd) > SCULL_IOC_MAXNR)
+    //     return -ENOTTY;
 
-    // dev = (Test_Dev *)filp->private_data;
-    // if (!dev) {
-    //     if (num >= scull_nr_devs) return -ENODEV;
-    //     dev = &Test_devices[num];
-    //     filp->private_data = dev;
-    // }
+    // if (_IOC_DIR(cmd) & _IOC_READ)
+    //     err = verify_area(VERIFY_WRITE, (void *)arg, _IOC_SIZE(cmd));
+    // else if (_IOC_DIR(cmd) & _IOC_WRITE)
+    //     err = verify_area(VERIFY_READ, (void *)arg, _IOC_SIZE(cmd));
+    // if (err)
+    //     return err;
 
-    // MOD_INC_USE_COUNT;
-
-    // if ( (filp->f_flags & O_ACCMODE) == O_WRONLY) {
-    //     if (down_interruptible(&dev->sem)) {
-    //         MOD_DEC_USE_COUNT;
-    //         return -ERESTARTSYS;
-    //     }
-    //     scull_trim(dev);
-    //     up(&dev->sem);
-    // }
+    switch (cmd)
+    {
+    default: /* redundant, as cmd was checked against MAXNR */
+        return -ENOTTY;
+    }
 
     return 0;
 }
